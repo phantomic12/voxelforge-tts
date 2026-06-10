@@ -37,16 +37,30 @@ class CDPSession:
         self.ws.send(json.dumps(msg))
         return self._msg_id
 
-    def wait_for(self, msg_id, timeout=30):
-        self.ws.settimeout(timeout)
+    def wait_for(self, msg_id, timeout=30, debug=False):
+        """Wait for a specific response ID, filtering out events from other sources."""
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
-                resp = json.loads(self.ws.recv())
+                self.ws.settimeout(max(0.1, deadline - time.time()))
+                raw = self.ws.recv()
+                if not raw:
+                    continue
+                try:
+                    resp = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
                 if resp.get("id") == msg_id:
                     return resp
+                if debug:
+                    # Show what other events we're seeing
+                    method = resp.get("method", "")
+                    if method:
+                        print(f"        [event] {method}", flush=True)
             except websocket.WebSocketTimeoutException:
-                return None
+                continue
+            except Exception:
+                continue
         return None
 
     def attach(self, target_id):
@@ -106,6 +120,13 @@ class CDPSession:
 def get_targets():
     with urllib.request.urlopen(f"{CDP}/json/list") as r:
         return json.loads(r.read())
+
+
+def v(resp):
+    """Get the .value from a CDP Runtime.evaluate response, handling None safely."""
+    if not resp:
+        return {}
+    return resp.get("result", {}).get("result", {}).get("value", {}) or {}
 
 
 def get_browser_ws():
@@ -171,7 +192,7 @@ def main():
         })()""",
         target["id"], timeout=10,
     )
-    state = ready_resp.get("result", {}).get("result", {}).get("value", {})
+    state = v(ready_resp)
     print(f"      title:  {state.get('title')}")
     print(f"      models: {state.get('models')}")
     print(f"      GPU:    {state.get('gpuText', '').strip()}")
@@ -190,26 +211,26 @@ def main():
     cdp.screenshot(target["id"], shot1)
     print(f"      → {shot1} ({shot1.stat().st_size // 1024} KB)")
 
-    # 5. Select SpeechT5 model
-    print(f"\n[5/9] Selecting SpeechT5 model (balanced, English)")
+    # 5. Select MMS-TTS English (default; SpeechT5 requires speaker embeddings)
+    print(f"\n[5/9] Selecting MMS-TTS English model (default)")
     sel_resp = cdp.eval(
         """(function() {
-            const card = document.querySelector('.model-card[data-model-id="speecht5"]');
-            if (!card) return { ok: false, msg: 'no speecht5 card' };
-            card.click();
-            return {
-                ok: true,
-                selected: document.querySelector('.model-card--selected')?.dataset.modelId,
-                name: card.querySelector('.model-card__name')?.textContent
-            };
-        })()""",
+              const card = document.querySelector('.model-card[data-model-id="mms-tts-eng"]');
+              if (!card) return { ok: false, msg: 'no mms-tts-eng card' };
+              card.click();
+              return {
+                  ok: true,
+                  selected: document.querySelector('.model-card--selected')?.dataset.modelId,
+                  name: card.querySelector('.model-card__name')?.textContent
+              };
+          })()""",
         target["id"], timeout=10,
     )
-    sel = sel_resp.get("result", {}).get("result", {}).get("value", {})
+    sel = v(sel_resp)
     print(f"      selected: {sel.get('selected')}")
     print(f"      name:     {sel.get('name')}")
-    if sel.get("selected") != "speecht5":
-        print("      ❌ Failed to select model")
+    if sel.get("selected") != "mms-tts-eng":
+        print(f"      ❌ Failed to select model: sel={sel}")
         sys.exit(1)
     print("      ✓ Model selected")
 
@@ -229,7 +250,7 @@ def main():
         })()""",
         target["id"], timeout=5,
     )
-    click = click_resp.get("result", {}).get("result", {}).get("value", {})
+    click = v(click_resp)
     print(f"      btn.disabled: {click.get('state')}")
     print(f"      btn text:     {click.get('text')}")
     if not click.get("state"):
@@ -261,7 +282,7 @@ def main():
             })()""",
             target["id"], timeout=10,
         )
-        s = poll.get("result", {}).get("result", {}).get("value", {})
+        s = v(poll)
 
         # Build a one-line summary
         progress_str = s.get("progress", "")[:50] if s.get("progress") else ""
@@ -315,26 +336,31 @@ def main():
             ta.dispatchEvent(new Event('input', {{ bubbles: true }}));
             return {{ len: ta.value.length }};
         }})()""",
-        target["id"], timeout=5,
+        target["id"], timeout=10,
     )
-    t = type_resp.get("result", {}).get("result", {}).get("value", {})
+    t = v(type_resp)
     print(f"      typed: {t.get('len')} chars")
+    if t.get("len", 0) < 50:
+        print(f"      ⚠ type_resp was: {type_resp}")
+        sys.exit(1)
 
-    # Click generate
-    gen_resp = cdp.eval(
+    # Click generate (sync — returns immediately; generation happens async)
+    # First sleep briefly to let any pending events drain
+    time.sleep(0.5)
+    click_resp = cdp.eval(
         """(function() {
             const btn = document.getElementById('generate-btn');
             if (btn.disabled) return { ok: false, msg: 'btn disabled' };
             btn.click();
-            return { ok: true };
+            return { ok: true, time: Date.now() };
         })()""",
-        target["id"], timeout=5,
+        target["id"], timeout=15,
     )
-    gr = gen_resp.get("result", {}).get("result", {}).get("value", {})
-    if not gr.get("ok"):
-        print(f"      ❌ Generate button not clickable: {gr.get('msg')}")
+    cr = v(click_resp)
+    if not cr.get("ok"):
+        print(f"      ❌ Generate button not clickable: {cr.get('msg')}")
         sys.exit(1)
-    print(f"      ✓ Generate clicked, waiting for audio...")
+    print(f"      ✓ Generate clicked, polling for audio...")
 
     # Poll for audio
     print("      Polling for audio output (up to 5 minutes)...")
@@ -359,7 +385,7 @@ def main():
             })()""",
             target["id"], timeout=10,
         )
-        s = poll.get("result", {}).get("result", {}).get("value", {})
+        s = v(poll)
         if s.get("playerVisible") and s.get("audioSrc"):
             print(f"      ✓ Audio generated!")
             print(f"        src:          {s.get('audioSrc')[:50]}")
@@ -412,7 +438,7 @@ def main():
         })()""",
         target["id"], timeout=5,
     )
-    f = final.get("result", {}).get("result", {}).get("value", {})
+    f = v(final)
     print(f"      audio src:   {'blob: ✓' if f.get('src') else 'not a blob'}")
     print(f"      duration:    {f.get('duration')}s")
     print(f"      gen enabled: {f.get('genBtnEnabled')}")
