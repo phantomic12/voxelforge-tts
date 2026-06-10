@@ -164,11 +164,10 @@ function bindEvents() {
     const text = textInput.value.trim();
     if (!text) return;
 
-    const audio = await engine.generate(text);
+    const { audio, samplingRate } = await engine.generate(text);
 
     // Convert Float32Array to WAV blob
-    const sampleRate = 16000;
-    lastAudioBlob = float32ToWav(audio, sampleRate);
+    lastAudioBlob = float32ToWav(audio, samplingRate);
 
     const audioUrl = URL.createObjectURL(lastAudioBlob);
     const audioEl = document.getElementById('audio-element') as HTMLAudioElement;
