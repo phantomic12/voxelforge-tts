@@ -1,0 +1,176 @@
+import { pipeline } from '@huggingface/transformers';
+
+// ─── Model definitions ───────────────────────────────────────────
+export interface TTSModel {
+  id: string;
+  name: string;
+  modelId: string;
+  description: string;
+  category: 'fast' | 'balanced' | 'multilingual';
+}
+
+export const MODELS: TTSModel[] = [
+  {
+    id: 'speecht5',
+    name: 'SpeechT5',
+    modelId: 'Xenova/speecht5_tts',
+    description: 'Microsoft transformer-based TTS. Good quality, English.',
+    category: 'balanced',
+  },
+  {
+    id: 'mms-tts-eng',
+    name: 'MMS-TTS (English)',
+    modelId: 'Xenova/mms-tts-eng',
+    description: 'Meta MMS. 1,100+ languages supported.',
+    category: 'multilingual',
+  },
+  {
+    id: 'mms-tts-spa',
+    name: 'MMS-TTS (Spanish)',
+    modelId: 'Xenova/mms-tts-spa',
+    description: 'Meta MMS for Spanish.',
+    category: 'multilingual',
+  },
+  {
+    id: 'mms-tts-fra',
+    name: 'MMS-TTS (French)',
+    modelId: 'Xenova/mms-tts-fra',
+    description: 'Meta MMS for French.',
+    category: 'multilingual',
+  },
+  {
+    id: 'mms-tts-deu',
+    name: 'MMS-TTS (German)',
+    modelId: 'Xenova/mms-tts-deu',
+    description: 'Meta MMS for German.',
+    category: 'multilingual',
+  },
+  {
+    id: 'mms-tts-jpn',
+    name: 'MMS-TTS (Japanese)',
+    modelId: 'Xenova/mms-tts-jpn',
+    description: 'Meta MMS for Japanese.',
+    category: 'multilingual',
+  },
+  {
+    id: 'mms-tts-zho',
+    name: 'MMS-TTS (Chinese)',
+    modelId: 'Xenova/mms-tts-zho',
+    description: 'Meta MMS for Chinese.',
+    category: 'multilingual',
+  },
+];
+
+// ─── GPU detection ───────────────────────────────────────────────
+export async function detectWebGPU(): Promise<boolean> {
+  if (!('gpu' in navigator)) return false;
+  try {
+    const adapter = await (navigator as any).gpu.requestAdapter();
+    return !!adapter;
+  } catch {
+    return false;
+  }
+}
+
+// ─── Engine state ────────────────────────────────────────────────
+export type EngineState = 'idle' | 'loading' | 'ready' | 'generating' | 'error';
+
+export interface EngineEvents {
+  onStateChange?: (state: EngineState) => void;
+  onProgress?: (loaded: number, total: number, model: string) => void;
+  onError?: (error: string) => void;
+}
+
+// ─── TTS Engine ──────────────────────────────────────────────────
+export class TTSEngine {
+  // The pipeline return type is a massive union; we use 'any' internally to avoid type gymnastics
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private pipe: any = null;
+  private currentModelId: string | null = null;
+  private state: EngineState = 'idle';
+  private events: EngineEvents;
+  private useWebGPU: boolean;
+
+  constructor(events: EngineEvents = {}, useWebGPU = true) {
+    this.events = events;
+    this.useWebGPU = useWebGPU;
+  }
+
+  private setState(state: EngineState) {
+    this.state = state;
+    this.events.onStateChange?.(state);
+  }
+
+  getState(): EngineState {
+    return this.state;
+  }
+
+  async loadModel(model: TTSModel): Promise<void> {
+    if (this.currentModelId === model.modelId && this.pipe) {
+      this.setState('ready');
+      return;
+    }
+
+    this.setState('loading');
+    this.events.onProgress?.(0, 1, model.name);
+
+    try {
+      const newPipe = await pipeline('text-to-speech', model.modelId, {
+        device: this.useWebGPU ? 'webgpu' : 'wasm',
+        progress_callback: (progress: any) => {
+          if (progress.status === 'progress') {
+            this.events.onProgress?.(
+              progress.loaded ?? 0,
+              progress.total ?? 1,
+              model.name
+            );
+          } else if (progress.status === 'done') {
+            this.events.onProgress?.(1, 1, model.name);
+          }
+        },
+      });
+
+      // Dispose previous pipeline if switching models
+      if (this.pipe && typeof this.pipe.dispose === 'function') {
+        this.pipe.dispose();
+      }
+
+      this.pipe = newPipe;
+      this.currentModelId = model.modelId;
+      this.setState('ready');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.events.onError?.(msg);
+      this.setState('error');
+      throw err;
+    }
+  }
+
+  async generate(text: string): Promise<Float32Array> {
+    if (!this.pipe) {
+      throw new Error('No model loaded');
+    }
+
+    this.setState('generating');
+
+    try {
+      const result = await this.pipe(text);
+      this.setState('ready');
+      return result.audio;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.events.onError?.(msg);
+      this.setState('error');
+      throw err;
+    }
+  }
+
+  dispose() {
+    if (this.pipe && typeof this.pipe.dispose === 'function') {
+      this.pipe.dispose();
+    }
+    this.pipe = null;
+    this.currentModelId = null;
+    this.setState('idle');
+  }
+}

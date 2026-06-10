@@ -1,0 +1,19 @@
+{
+  "name": "voxelforge-tts",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Privacy-first browser TTS — all inference runs locally via WebGPU",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.6.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
