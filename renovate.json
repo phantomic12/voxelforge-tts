@@ -1,6 +1,27 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
-  ]
+    "config:base"
+  ],
+  "schedule": ["every weekday"],
+  "timezone": "America/Los_Angeles",
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"]
+  },
+  "packageRules": [
+    {
+      "description": "Automerge patch and minor updates",
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Group dev dependencies together",
+      "matchPackagePatterns": ["typescript", "vite", "eslint"],
+      "groupName": "dev dependencies"
+    }
+  ],
+  "prConcurrentLimit": 5
 }
