@@ -164,16 +164,48 @@ function bindEvents() {
     const text = textInput.value.trim();
     if (!text) return;
 
-    const { audio, samplingRate } = await engine.generate(text);
+    // ── Show generating overlay BEFORE the blocking ONNX call ──
+    // Inject the overlay + force a layout reflow so Chrome paints it
+    // even though the main thread is about to freeze.
+    const overlay = document.createElement('div');
+    overlay.className = 'gen-overlay';
+    overlay.innerHTML = `
+      <div class="gen-overlay__card">
+        <div class="gen-overlay__spinner"></div>
+        <div class="gen-overlay__title">Generating speech…</div>
+        <div class="gen-overlay__sub">Text-to-speech inference running locally</div>
+      </div>`;
+    document.body.appendChild(overlay);
+    // Force layout → browser paints the overlay immediately
+    overlay.offsetHeight;
 
-    // Convert Float32Array to WAV blob
-    lastAudioBlob = float32ToWav(audio, samplingRate);
+    // Disable button to prevent double-clicks
+    (document.getElementById('generate-btn') as HTMLButtonElement).disabled = true;
 
-    const audioUrl = URL.createObjectURL(lastAudioBlob);
-    const audioEl = document.getElementById('audio-element') as HTMLAudioElement;
-    audioEl.src = audioUrl;
-    document.getElementById('player')!.classList.add('player--visible');
-    audioEl.play();
+    const t0 = performance.now();
+    try {
+      const { audio, samplingRate } = await engine.generate(text);
+      const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+
+      // Show brief "done" card, then remove
+      const card = overlay.querySelector('.gen-overlay__card')!;
+      card.innerHTML = `
+        <div class="gen-overlay__check">✓</div>
+        <div class="gen-overlay__title">Generated in ${elapsed}s</div>`;
+      overlay.classList.add('gen-overlay--done');
+      setTimeout(() => overlay.remove(), 600);
+
+      // Convert Float32Array to WAV blob
+      lastAudioBlob = float32ToWav(audio, samplingRate);
+
+      const audioUrl = URL.createObjectURL(lastAudioBlob);
+      const audioEl = document.getElementById('audio-element') as HTMLAudioElement;
+      audioEl.src = audioUrl;
+      document.getElementById('player')!.classList.add('player--visible');
+      audioEl.play();
+    } catch (err) {
+      overlay.remove();
+    }
   });
 
   // Download
