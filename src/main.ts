@@ -187,13 +187,17 @@ function bindEvents() {
       const { audio, samplingRate } = await engine.generate(text);
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
 
-      // Show brief "done" card, then remove
+      // Show brief "done" card. Hold the overlay for at least 700ms so even
+      // instant generations stay visible long enough to register.
+      const elapsedMs = performance.now() - t0;
+      const minVisible = 700;
+      const holdMs = Math.max(0, minVisible - elapsedMs);
       const card = overlay.querySelector('.gen-overlay__card')!;
       card.innerHTML = `
         <div class="gen-overlay__check">✓</div>
         <div class="gen-overlay__title">Generated in ${elapsed}s</div>`;
       overlay.classList.add('gen-overlay--done');
-      setTimeout(() => overlay.remove(), 600);
+      setTimeout(() => overlay.remove(), 200 + holdMs);
 
       // Convert Float32Array to WAV blob
       lastAudioBlob = float32ToWav(audio, samplingRate);
