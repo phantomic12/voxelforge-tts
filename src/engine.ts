@@ -31,9 +31,12 @@ export const MODELS: TTSModel[] = [
     id: 'speecht5',
     name: 'SpeechT5',
     modelId: 'Xenova/speecht5_tts',
-    description: 'Microsoft transformer-based TTS. Good quality, English. (advanced)',
+    description: 'Microsoft transformer-based TTS. Good quality, English.',
     category: 'balanced',
     sampleRate: 16000,
+    // SpeechT5 has no built-in default speaker — must pass speaker embeddings.
+    // Using the public CMU-Arctic xvector sample from the Transformers.js docs.
+    speakerEmbeddings: 'https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/speaker_embeddings.bin',
   },
   {
     id: 'mms-tts-spa',

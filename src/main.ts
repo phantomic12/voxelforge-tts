@@ -184,7 +184,9 @@ function bindEvents() {
 
     const t0 = performance.now();
     try {
-      const { audio, samplingRate } = await engine.generate(text);
+      const { audio, samplingRate } = await engine.generate(text, {
+        speakerEmbeddings: selectedModel.speakerEmbeddings,
+      });
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
 
       // Show brief "done" card. Hold the overlay for at least 700ms so even
