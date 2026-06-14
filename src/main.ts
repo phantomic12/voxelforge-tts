@@ -1,5 +1,11 @@
 import './style.css';
+import { env, LogLevel } from '@huggingface/transformers';
 import { TTSEngine, MODELS, detectWebGPU, type TTSModel } from './engine';
+
+// ─── Surface pipeline internals so failures don't look like silent hangs ───
+// Default in v4 is WARNING, but the SpeechT5 path is sensitive — keep INFO so
+// ONNX Runtime session creation messages appear in the browser console.
+env.logLevel = LogLevel.INFO;
 
 // ─── DOM refs ────────────────────────────────────────────────────
 const app = document.getElementById('app')!;
@@ -145,7 +151,12 @@ function bindEvents() {
 
   // Load model
   document.getElementById('load-btn')!.addEventListener('click', async () => {
-    await engine.loadModel(selectedModel);
+    try {
+      await engine.loadModel(selectedModel);
+    } catch (err) {
+      // loadModel already called onError, but make sure the button is usable again
+      showStatus('error', `Load failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   });
 
   // Text input
@@ -165,8 +176,6 @@ function bindEvents() {
     if (!text) return;
 
     // ── Show generating overlay BEFORE the blocking ONNX call ──
-    // Inject the overlay + force a layout reflow so Chrome paints it
-    // even though the main thread is about to freeze.
     const overlay = document.createElement('div');
     overlay.className = 'gen-overlay';
     overlay.innerHTML = `
@@ -176,11 +185,10 @@ function bindEvents() {
         <div class="gen-overlay__sub">Text-to-speech inference running locally</div>
       </div>`;
     document.body.appendChild(overlay);
-    // Force layout → browser paints the overlay immediately
     overlay.offsetHeight;
 
-    // Disable button to prevent double-clicks
-    (document.getElementById('generate-btn') as HTMLButtonElement).disabled = true;
+    const generateBtn = document.getElementById('generate-btn') as HTMLButtonElement;
+    generateBtn.disabled = true;
 
     const t0 = performance.now();
     try {
@@ -189,8 +197,6 @@ function bindEvents() {
       });
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
 
-      // Show brief "done" card. Hold the overlay for at least 700ms so even
-      // instant generations stay visible long enough to register.
       const elapsedMs = performance.now() - t0;
       const minVisible = 700;
       const holdMs = Math.max(0, minVisible - elapsedMs);
@@ -201,7 +207,6 @@ function bindEvents() {
       overlay.classList.add('gen-overlay--done');
       setTimeout(() => overlay.remove(), 200 + holdMs);
 
-      // Convert Float32Array to WAV blob
       lastAudioBlob = float32ToWav(audio, samplingRate);
 
       const audioUrl = URL.createObjectURL(lastAudioBlob);
@@ -210,7 +215,19 @@ function bindEvents() {
       document.getElementById('player')!.classList.add('player--visible');
       audioEl.play();
     } catch (err) {
-      overlay.remove();
+      // ── Surface the actual error so "doesn't work" is debuggable ──
+      const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      console.error('[voxelforge] generate failed:', err);
+      const card = overlay.querySelector('.gen-overlay__card')!;
+      card.innerHTML = `
+        <div class="gen-overlay__check" style="background:#dc2626">✕</div>
+        <div class="gen-overlay__title">Generation failed</div>
+        <div class="gen-overlay__sub" style="font-family:ui-monospace,monospace;font-size:11px;max-width:520px;white-space:pre-wrap;word-break:break-word;text-align:left">${msg}</div>
+        <div class="gen-overlay__sub" style="margin-top:8px">Open the browser console (F12) for the full stack.</div>`;
+      overlay.classList.add('gen-overlay--done');
+      setTimeout(() => overlay.remove(), 8000);
+    } finally {
+      generateBtn.disabled = false;
     }
   });
 
